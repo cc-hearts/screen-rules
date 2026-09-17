@@ -9,7 +9,7 @@
 
 <p align="center">
   A tiny macOS menu bar app that forces each app's windows onto <b>the display you choose</b>, at <b>the size you choose</b>.<br>
-  中文文档见 <a href="README.zh-CN.md">README.zh-CN.md</a>
+  <a href="README.zh-CN.md">简体中文文档</a>
 </p>
 
 ## Why
@@ -20,7 +20,7 @@ ScreenRules fixes this with per-app rules:
 
 - **Display rule** — an app's new windows open on the main or the secondary display
 - **Size rule** — optionally resize windows to a percentage (50–100%) of the target display, centered
-- **Force mode for stubborn apps** — some apps (e.g. ones that reposition their own window on Dock click) get re-corrected by multi-pass enforcement after activation: 0.3s / 1.2s / 3s
+- **Force mode for stubborn apps** — apps that reposition their own window (e.g. on Dock click) get re-corrected by multi-pass enforcement after activation: 0.3s / 1.2s / 3s
 - Dialogs, drawers and floating panels are moved but never force-resized
 
 ## Install & Run
@@ -28,7 +28,7 @@ ScreenRules fixes this with per-app rules:
 Requires macOS 13+ and the Swift toolchain (Xcode Command Line Tools are enough — no Xcode project involved).
 
 ```sh
-git clone <this-repo>
+git clone https://github.com/cc-hearts/screen-rules.git
 cd screen-rules
 ./run.sh        # build + (re)launch
 ```
@@ -38,15 +38,16 @@ Then grant **Accessibility permission** when prompted (System Settings → Priva
 ## Usage
 
 1. Bring the app you want to tame to the foreground
-2. Click the ScreenRules icon in the menu bar → **当前 App：xxx**
-3. Pick a **屏幕** (display) and/or a **窗口大小** (size %)
+2. Click the ScreenRules icon in the menu bar → the "Current App: xxx" submenu
+3. Pick a display (Main / Secondary) and/or a window size (50%–100% of the target display's visible area, centered)
 4. Rules apply instantly to already-open windows; every new window follows from then on
 
-Other menu items:
+Other menu items: "Apply all rules now" snaps every ruled app's windows into place, "Open rules file…" reveals the JSON config, "Open debug log…" shows every observed event and move result.
 
-- **立即按规则整理所有窗口** — snap every ruled app's windows into place right now
-- **打开规则文件…** — rules live in `~/Library/Application Support/ScreenRules/rules.json`
-- **打开调试日志…** — every observed event and move result is logged to `debug.log`
+> [!NOTE]
+> The menu bar UI is currently Chinese-only; the item names above are translations.
+
+Rules are stored in `~/Library/Application Support/ScreenRules/rules.json`.
 
 ## How it works
 

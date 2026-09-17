@@ -25,7 +25,7 @@ ScreenRules 用按 App 的规则解决：
 需要 macOS 13+ 和 Swift 工具链（装 Xcode Command Line Tools 即可，项目不依赖 Xcode 工程）。
 
 ```sh
-git clone <本仓库>
+git clone https://github.com/cc-hearts/screen-rules.git
 cd screen-rules
 ./run.sh        # 构建 + （重）启动
 ```
@@ -62,6 +62,6 @@ cd screen-rules
 - 全屏窗口按设计不处理
 - 极少数 App 的非标准窗口拒绝被移动，遇到请看调试日志
 
-## License
+## 许可证
 
 [MIT](LICENSE)
