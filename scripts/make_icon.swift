@@ -1,66 +1,56 @@
 import AppKit
 
 // 用法: swift scripts/make_icon.swift <输出png路径>
-// 生成 1024x1024 图标: 蓝紫渐变圆角底 + 双显示器 + 搬家箭头
+// 1024x1024 透明底线条图标: 双显示器 + 窗口搬家箭头，蓝紫渐变描边
 let outPath = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "docs/logo.png"
-let size = CGSize(width: 1024, height: 1024)
-let image = NSImage(size: size)
-image.lockFocus()
+let W = 1024
+let colorSpace = CGColorSpaceCreateDeviceRGB()
+let ctx = CGContext(data: nil, width: W, height: W, bitsPerComponent: 8, bytesPerRow: 0,
+                    space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
 
-// 背景：macOS 风格圆角方块 + 渐变
-let bg = CGRect(x: 100, y: 100, width: 824, height: 824)
-let bgPath = NSBezierPath(roundedRect: bg, xRadius: 185, yRadius: 185)
-let gradient = NSGradient(colors: [
-    NSColor(calibratedRed: 0.24, green: 0.52, blue: 0.98, alpha: 1),   // 顶：亮蓝
-    NSColor(calibratedRed: 0.44, green: 0.32, blue: 0.93, alpha: 1),   // 底：紫
-])!
-gradient.draw(in: bgPath, angle: -90)
-
-func drawMonitor(frame: CGRect, color: NSColor, lineWidth: CGFloat, filledWindow: Bool) {
-    let screen = NSBezierPath(roundedRect: frame, xRadius: 26, yRadius: 26)
-    screen.lineWidth = lineWidth
-    color.setStroke()
-    screen.stroke()
-    // 支架 + 底座
-    let stand = NSBezierPath()
-    stand.move(to: NSPoint(x: frame.midX, y: frame.minY))
-    stand.line(to: NSPoint(x: frame.midX, y: frame.minY - 46))
-    stand.move(to: NSPoint(x: frame.midX - 70, y: frame.minY - 46))
-    stand.line(to: NSPoint(x: frame.midX + 70, y: frame.minY - 46))
-    stand.lineWidth = lineWidth
-    stand.lineCapStyle = .round
-    color.setStroke()
-    stand.stroke()
-    if filledWindow {
-        let win = NSBezierPath(roundedRect: frame.insetBy(dx: 34, dy: 34), xRadius: 14, yRadius: 14)
-        color.setFill()
-        win.fill()
-    }
+func rounded(_ rect: CGRect, _ r: CGFloat) -> CGPath {
+    CGPath(roundedRect: rect, cornerWidth: r, cornerHeight: r, transform: nil)
 }
 
-let lw: CGFloat = 26
-// 左：主屏（半透明，空）
-drawMonitor(frame: CGRect(x: 170, y: 520, width: 300, height: 210),
-            color: NSColor.white.withAlphaComponent(0.45), lineWidth: lw, filledWindow: false)
-// 右：副屏（实色，内含窗口）
-drawMonitor(frame: CGRect(x: 554, y: 520, width: 300, height: 210),
-            color: NSColor.white, lineWidth: lw, filledWindow: true)
-// 中间箭头：窗口搬家
-let arrow = NSBezierPath()
-arrow.move(to: NSPoint(x: 484, y: 625))
-arrow.line(to: NSPoint(x: 540, y: 625))
-arrow.move(to: NSPoint(x: 512, y: 655))
-arrow.line(to: NSPoint(x: 542, y: 625))
-arrow.line(to: NSPoint(x: 512, y: 595))
-arrow.lineWidth = 24
-arrow.lineCapStyle = .round
-arrow.lineJoinStyle = .round
-NSColor.white.withAlphaComponent(0.8).setStroke()
-arrow.stroke()
+// 主线条：两台显示器 + 支架 + 箭头
+let main = CGMutablePath()
+let lf = CGRect(x: 70, y: 400, width: 380, height: 260)    // 左：主屏
+main.addPath(rounded(lf, 36))
+main.move(to: CGPoint(x: lf.midX, y: lf.minY))
+main.addLine(to: CGPoint(x: lf.midX, y: lf.minY - 60))
+main.move(to: CGPoint(x: lf.midX - 90, y: lf.minY - 60))
+main.addLine(to: CGPoint(x: lf.midX + 90, y: lf.minY - 60))
 
-image.unlockFocus()
+let rf = CGRect(x: 574, y: 400, width: 380, height: 260)   // 右：副屏
+main.addPath(rounded(rf, 36))
+main.move(to: CGPoint(x: rf.midX, y: rf.minY))
+main.addLine(to: CGPoint(x: rf.midX, y: rf.minY - 60))
+main.move(to: CGPoint(x: rf.midX - 90, y: rf.minY - 60))
+main.addLine(to: CGPoint(x: rf.midX + 90, y: rf.minY - 60))
 
-let rep = NSBitmapImageRep(data: image.tiffRepresentation!)!
-let png = rep.representation(using: .png, properties: [:])!
-try png.write(to: URL(fileURLWithPath: outPath))
+let ay: CGFloat = 530                                       // 箭头：窗口搬家
+main.move(to: CGPoint(x: 472, y: ay))
+main.addLine(to: CGPoint(x: 552, y: ay))
+main.move(to: CGPoint(x: 520, y: ay + 32))
+main.addLine(to: CGPoint(x: 554, y: ay))
+main.addLine(to: CGPoint(x: 520, y: ay - 32))
+
+// 副屏里的窗口（细一点的线，区分层次）
+let win = CGMutablePath()
+win.addPath(rounded(rf.insetBy(dx: 42, dy: 42), 18))
+
+// 描边转区域，作为渐变的裁剪蒙版
+ctx.addPath(main.copy(strokingWithWidth: 30, lineCap: .round, lineJoin: .round, miterLimit: 10))
+ctx.addPath(win.copy(strokingWithWidth: 20, lineCap: .round, lineJoin: .round, miterLimit: 10))
+ctx.clip()
+
+// 左上(蓝) -> 右下(紫) 渐变
+let grad = CGGradient(colorsSpace: colorSpace, colors: [
+    CGColor(srgbRed: 0.23, green: 0.51, blue: 0.98, alpha: 1),
+    CGColor(srgbRed: 0.49, green: 0.34, blue: 0.93, alpha: 1),
+] as CFArray, locations: [0, 1])!
+ctx.drawLinearGradient(grad, start: CGPoint(x: 0, y: 1024), end: CGPoint(x: 1024, y: 0), options: [])
+
+let rep = NSBitmapImageRep(cgImage: ctx.makeImage()!)
+try rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: outPath))
 print("written: \(outPath)")
