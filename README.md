@@ -21,7 +21,7 @@ ScreenRules fixes this with per-app rules:
 - **Display rule** — an app's new windows open on the main or the secondary display
 - **Size rule** — optionally resize windows to a percentage (50–100%) of the target display, centered
 - **Force mode for stubborn apps** — apps that reposition their own window (e.g. on Dock click) get re-corrected by multi-pass enforcement after activation: 0.3s / 1.2s / 3s
-- Dialogs, drawers and floating panels are moved but never force-resized
+- Only standard main windows are managed — IME candidate popups, dialogs, drawers and floating panels are never touched
 
 ## Install & Run
 

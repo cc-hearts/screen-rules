@@ -100,6 +100,7 @@ final class WindowMover {
     }
 
     enum MoveResult: CustomStringConvertible {
+        case skipped               // 非标准窗口（输入法候选框/对话框/面板等），不处理
         case moved(from: String, to: String)
         case resized(Int)            // 缩放百分比
         case alreadyThere
@@ -108,12 +109,15 @@ final class WindowMover {
         case axFailed(String)
 
         var shouldLog: Bool {
-            if case .noRule = self { return false }
-            return true
+            switch self {
+            case .noRule, .skipped: return false
+            default: return true
+            }
         }
 
         var description: String {
             switch self {
+            case .skipped:           return "skipped"
             case .moved(let f, let t): return "moved \(f) -> \(t)"
             case .resized(let p):      return "resized to \(p)%"
             case .alreadyThere:       return "already ok"
@@ -135,6 +139,7 @@ final class WindowMover {
 
     /// 对单个窗口应用规则：先搬屏（如有 target），再调尺寸（如有 scale）
     private func apply(rule: Rule, to window: AXUIElement) -> MoveResult {
+        guard shouldManage(window) else { return .skipped }
         var posRef: CFTypeRef?
         var sizeRef: CFTypeRef?
         let posErr = AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &posRef)
@@ -160,8 +165,7 @@ final class WindowMover {
 
         let tv = target.visibleFrame
         var newRect: CGRect
-        // 尺寸规则只作用于标准窗口；对话框/浮动面板走 else 分支（只搬屏不缩放）
-        if let scale = rule.scale, isStandardWindow(window) {
+        if let scale = rule.scale {
             let clamped = min(max(scale, 0.1), 1.0)
             let w = tv.width * clamped
             let h = tv.height * clamped
@@ -203,11 +207,17 @@ final class WindowMover {
         return .alreadyThere
     }
 
-    private func isStandardWindow(_ window: AXUIElement) -> Bool {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(window, kAXSubroleAttribute as CFString, &value) == .success,
-              let subrole = value as? String else { return true }   // 读不到就当标准窗口处理
-        return subrole == "AXStandardWindow" || subrole == "AXDialog"
+    /// 只管理「正常主窗口」。输入法候选框、对话框、抽屉、浮动面板等一律跳过——
+    /// 它们会被系统/宿主 App 自己定位（比如候选框跟随光标），我们插手只会添乱。
+    /// 读不出 subrole 时保守跳过。
+    private func shouldManage(_ window: AXUIElement) -> Bool {
+        var roleRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, kAXRoleAttribute as CFString, &roleRef) == .success,
+              (roleRef as? String) == kAXWindowRole else { return false }
+        var subRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, kAXSubroleAttribute as CFString, &subRef) == .success,
+              (subRef as? String) == "AXStandardWindow" else { return false }
+        return true
     }
 
     private func axWindows(pid: pid_t) -> [AXUIElement] {
