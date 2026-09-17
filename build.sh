@@ -4,8 +4,9 @@ cd "$(dirname "$0")"
 swift build -c release
 APP=ScreenRules.app
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/ScreenRules "$APP/Contents/MacOS/ScreenRules"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 # 优先用固定的自签名证书（权限授权跨构建保留）；没有就退回临时签名（每次构建权限会失效）
 if security find-identity -v -p codesigning | grep -q "ScreenRules Dev"; then
