@@ -1,7 +1,11 @@
 import Cocoa
 import ApplicationServices
 
-/// 监听所有 App 的“新窗口创建”事件，命中规则就把窗口搬到目标屏。
+/// 监听有规则的 App 的窗口动向，把窗口搬到目标屏 / 调整到设定尺寸。
+///
+/// 有些 App（如 Seedmux）自己的代码会在 Dock 点击后把窗口放回主屏，
+/// 所以不能只监听「窗口创建」一个事件：激活 App 后做多轮盘点（0.3s / 1.2s / 3s），
+/// 凡是不符合规则的窗口都强行纠正。
 final class WindowMover {
     static let shared = WindowMover()
     private var observers: [pid_t: AXObserver] = [:]
@@ -13,15 +17,15 @@ final class WindowMover {
         let nc = NSWorkspace.shared.notificationCenter
         nc.addObserver(self, selector: #selector(appLaunched(_:)), name: NSWorkspace.didLaunchApplicationNotification, object: nil)
         nc.addObserver(self, selector: #selector(appTerminated(_:)), name: NSWorkspace.didTerminateApplicationNotification, object: nil)
-        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
-            attach(pid: app.processIdentifier)
-        }
-        NSLog("ScreenRules: started, watching \(observers.count) apps")
+        nc.addObserver(self, selector: #selector(appActivated(_:)), name: NSWorkspace.didActivateApplicationNotification, object: nil)
+        let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
+        for app in apps { attach(pid: app.processIdentifier, name: app.localizedName) }
+        SRLog.log("watcher started, attached \(observers.count)/\(apps.count) apps")
     }
 
     @objc private func appLaunched(_ note: Notification) {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
-        attach(pid: app.processIdentifier)
+        attach(pid: app.processIdentifier, name: app.localizedName)
     }
 
     @objc private func appTerminated(_ note: Notification) {
@@ -29,88 +33,198 @@ final class WindowMover {
         observers.removeValue(forKey: app.processIdentifier)
     }
 
-    private func attach(pid: pid_t, isRetry: Bool = false) {
+    @objc private func appActivated(_ note: Notification) {
+        guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              let bundleID = app.bundleIdentifier,
+              bundleID != Bundle.main.bundleIdentifier,
+              RuleStore.shared.rule(for: bundleID) != nil else { return }
+        scheduleEnforcement(pid: app.processIdentifier, name: app.localizedName ?? bundleID)
+    }
+
+    /// 多轮盘点：有些 App 会在激活后自己再动窗口，首轮纠正会被它覆盖，故重复几次
+    private func scheduleEnforcement(pid: pid_t, name: String) {
+        for delay in [0.3, 1.2, 3.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.enforceAllWindows(pid: pid, name: name, reason: "activation+\(delay)s")
+            }
+        }
+    }
+
+    private func enforceAllWindows(pid: pid_t, name: String, reason: String) {
+        for w in axWindows(pid: pid) {
+            let result = applyRule(pid: pid, window: w)
+            if result.shouldLog {
+                SRLog.log("\(reason): \(name) -> \(result)")
+            }
+        }
+    }
+
+    private func attach(pid: pid_t, name: String?, isRetry: Bool = false) {
         guard observers[pid] == nil else { return }
         var observer: AXObserver?
-        guard AXObserverCreate(pid, windowCreatedCallback, &observer) == .success, let observer else { return }
+        let createErr = AXObserverCreate(pid, windowCreatedCallback, &observer)
+        guard createErr == .success, let observer else {
+            SRLog.log("attach FAILED(create \(createErr.rawValue)): \(name ?? "?") pid=\(pid)")
+            return
+        }
         let appElement = AXUIElementCreateApplication(pid)
         let refcon = Unmanaged.passUnretained(self).toOpaque()
         let err = AXObserverAddNotification(observer, appElement, kAXWindowCreatedNotification as CFString, refcon)
         guard err == .success else {
-            // App 刚启动时 AX 可能还没就绪，1 秒后重试一次
             if !isRetry {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-                    self?.attach(pid: pid, isRetry: true)
+                    self?.attach(pid: pid, name: name, isRetry: true)
                 }
+            } else {
+                SRLog.log("attach FAILED(add \(err.rawValue)): \(name ?? "?") pid=\(pid)")
             }
             return
         }
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
         observers[pid] = observer
+        SRLog.log("attached: \(name ?? "?") pid=\(pid)")
     }
 
     fileprivate func handleWindowCreated(pid: pid_t, window: AXUIElement) {
-        // 稍等片刻再搬：很多 App 创建窗口后还会自己调整一次位置/尺寸
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-            self?.applyRule(pid: pid, window: window)
+        // 两轮：很多 App 创建窗口后还会自己调整一次位置/尺寸（比如 Dock 点击触发的展示逻辑）
+        for delay in [0.25, 1.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self else { return }
+                let name = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "?"
+                let result = self.applyRule(pid: pid, window: window)
+                if result.shouldLog {
+                    SRLog.log("window-created+\(delay)s: \(name) pid=\(pid) -> \(result)")
+                }
+            }
         }
     }
 
-    func applyRule(pid: pid_t, window: AXUIElement) {
+    enum MoveResult: CustomStringConvertible {
+        case moved(from: String, to: String)
+        case resized(Int)            // 缩放百分比
+        case alreadyThere
+        case noRule
+        case noTargetDisplay
+        case axFailed(String)
+
+        var shouldLog: Bool {
+            if case .noRule = self { return false }
+            return true
+        }
+
+        var description: String {
+            switch self {
+            case .moved(let f, let t): return "moved \(f) -> \(t)"
+            case .resized(let p):      return "resized to \(p)%"
+            case .alreadyThere:       return "already ok"
+            case .noRule:             return "no rule"
+            case .noTargetDisplay:    return "target display not found"
+            case .axFailed(let s):    return "AX failed: \(s)"
+            }
+        }
+    }
+
+    @discardableResult
+    func applyRule(pid: pid_t, window: AXUIElement) -> MoveResult {
         guard let app = NSRunningApplication(processIdentifier: pid),
               let bundleID = app.bundleIdentifier,
               bundleID != Bundle.main.bundleIdentifier,
-              let rule = RuleStore.shared.rule(for: bundleID),
-              let target = DisplayManager.resolve(rule.target) else { return }
-        move(window: window, to: target)
+              let rule = RuleStore.shared.rule(for: bundleID) else { return .noRule }
+        return apply(rule: rule, to: window)
     }
 
-    /// 把窗口搬到目标屏：保持尺寸和“相对位置比例”，并夹取到可见区域内
-    func move(window: AXUIElement, to target: DisplayInfo) {
+    /// 对单个窗口应用规则：先搬屏（如有 target），再调尺寸（如有 scale）
+    private func apply(rule: Rule, to window: AXUIElement) -> MoveResult {
         var posRef: CFTypeRef?
         var sizeRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &posRef) == .success,
-              AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeRef) == .success else { return }
+        let posErr = AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &posRef)
+        let sizeErr = AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeRef)
+        guard posErr == .success, sizeErr == .success else {
+            return .axFailed("read pos=\(posErr.rawValue) size=\(sizeErr.rawValue)")
+        }
         var axPos = CGPoint.zero
         var axSize = CGSize.zero
         AXValueGetValue(posRef as! AXValue, .cgPoint, &axPos)
         AXValueGetValue(sizeRef as! AXValue, .cgSize, &axSize)
-        guard axSize.width > 0, axSize.height > 0 else { return }
+        guard axSize.width > 0, axSize.height > 0 else { return .axFailed("zero size") }
 
         let rect = DisplayManager.axToCocoa(CGRect(origin: axPos, size: axSize))
         let center = CGPoint(x: rect.midX, y: rect.midY)
-        guard let current = DisplayManager.display(containingCocoaPoint: center),
-              current.id != target.id else { return }   // 已在目标屏
+        guard let current = DisplayManager.display(containingCocoaPoint: center) else {
+            return .axFailed("current display not found")
+        }
 
-        let cv = current.visibleFrame
+        // 目标屏：规则指定则用之，否则用窗口当前所在屏（只调尺寸的场景）
+        let target = rule.target.flatMap { DisplayManager.resolve($0) } ?? current
+        if rule.target != nil && target.id == current.id && rule.scale == nil { return .alreadyThere }
+
         let tv = target.visibleFrame
-        let rx = cv.width  > 0 ? (rect.minX - cv.minX) / cv.width  : 0
-        let ry = cv.height > 0 ? (rect.minY - cv.minY) / cv.height : 0
-        let w = min(rect.width, tv.width)
-        let h = min(rect.height, tv.height)
-        var newRect = CGRect(x: tv.minX + rx * tv.width,
+        var newRect: CGRect
+        // 尺寸规则只作用于标准窗口；对话框/浮动面板走 else 分支（只搬屏不缩放）
+        if let scale = rule.scale, isStandardWindow(window) {
+            let clamped = min(max(scale, 0.1), 1.0)
+            let w = tv.width * clamped
+            let h = tv.height * clamped
+            // 已在目标屏且尺寸已符合 -> 不动
+            if target.id == current.id,
+               abs(rect.width - w) < 4, abs(rect.height - h) < 4,
+               abs(rect.midX - tv.midX) < 4, abs(rect.midY - tv.midY) < 4 {
+                return .alreadyThere
+            }
+            newRect = CGRect(x: tv.midX - w / 2, y: tv.midY - h / 2, width: w, height: h)
+        } else {
+            // 保持尺寸，按“相对位置比例”映射到目标屏，并夹取到可见区域内
+            let cv = current.visibleFrame
+            let rx = cv.width  > 0 ? (rect.minX - cv.minX) / cv.width  : 0
+            let ry = cv.height > 0 ? (rect.minY - cv.minY) / cv.height : 0
+            let w = min(rect.width, tv.width)
+            let h = min(rect.height, tv.height)
+            newRect = CGRect(x: tv.minX + rx * tv.width,
                              y: tv.minY + ry * tv.height,
                              width: w, height: h)
-        newRect.origin.x = min(max(newRect.minX, tv.minX), tv.maxX - w)
-        newRect.origin.y = min(max(newRect.minY, tv.minY), tv.maxY - h)
+            newRect.origin.x = min(max(newRect.minX, tv.minX), tv.maxX - w)
+            newRect.origin.y = min(max(newRect.minY, tv.minY), tv.maxY - h)
+        }
 
         let ax = DisplayManager.cocoaToAX(newRect)
         var p = ax.origin
         var s = ax.size
-        if let pv = AXValueCreate(.cgPoint, &p), let sv = AXValueCreate(.cgSize, &s) {
-            AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, pv)
-            AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sv)
+        guard let pv = AXValueCreate(.cgPoint, &p), let sv = AXValueCreate(.cgSize, &s) else {
+            return .axFailed("AXValueCreate")
         }
+        // 先设尺寸再设位置：有些 App 对位置设置有边界校验，先改尺寸可减少被夹取的概率
+        let ss = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sv)
+        let sp = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, pv)
+        guard sp == .success else {
+            return .axFailed("write pos=\(sp.rawValue) size=\(ss.rawValue)")
+        }
+        if target.id != current.id { return .moved(from: current.name, to: target.name) }
+        if rule.scale != nil { return .resized(Int((rule.scale ?? 1) * 100)) }
+        return .alreadyThere
     }
 
-    /// 把某个 App 所有已打开的窗口都按规则搬过去（设置规则时立即生效）
-    func moveExistingWindows(bundleID: String) {
-        guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) else { return }
-        let element = AXUIElementCreateApplication(app.processIdentifier)
+    private func isStandardWindow(_ window: AXUIElement) -> Bool {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, kAXSubroleAttribute as CFString, &value) == .success,
+              let subrole = value as? String else { return true }   // 读不到就当标准窗口处理
+        return subrole == "AXStandardWindow" || subrole == "AXDialog"
+    }
+
+    private func axWindows(pid: pid_t) -> [AXUIElement] {
+        let element = AXUIElementCreateApplication(pid)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value) == .success,
-              let windows = value as? [AXUIElement] else { return }
-        for w in windows { applyRule(pid: app.processIdentifier, window: w) }
+              let windows = value as? [AXUIElement] else { return [] }
+        return windows
+    }
+
+    /// 把某个 App 所有已打开的窗口都按规则归位（设置规则时立即生效）
+    func moveExistingWindows(bundleID: String) {
+        guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) else { return }
+        for w in axWindows(pid: app.processIdentifier) {
+            let result = applyRule(pid: app.processIdentifier, window: w)
+            SRLog.log("move-existing: \(app.localizedName ?? bundleID) -> \(result)")
+        }
     }
 
     /// 一键整理：所有有规则的 App，把已打开的窗口全部归位

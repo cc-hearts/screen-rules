@@ -8,7 +8,18 @@ enum RuleTarget: String, Codable {
 struct Rule: Codable {
     var bundleID: String
     var appName: String
-    var target: RuleTarget
+    var target: RuleTarget?   // nil = 屏幕位置跟随系统默认
+    var scale: Double?        // nil = 尺寸跟随系统默认；0.8 表示窗口占目标屏可见区域的 80%
+
+    /// 菜单里展示用，如「副屏 · 80%」；两项都未设置时返回 nil（规则应被删除）
+    var summary: String? {
+        switch (target, scale) {
+        case let (t?, s?): return "\(t.displayName) · \(Int(s * 100))%"
+        case let (t?, nil): return t.displayName
+        case let (nil, s?): return "\(Int(s * 100))%"
+        case (nil, nil):    return nil
+        }
+    }
 }
 
 /// 规则持久化: ~/Library/Application Support/ScreenRules/rules.json
@@ -29,12 +40,26 @@ final class RuleStore {
 
     var sortedRules: [Rule] { rules.values.sorted { $0.appName < $1.appName } }
 
-    /// target 为 nil 表示删除规则（跟随系统默认）
-    func set(bundleID: String, appName: String, target: RuleTarget?) {
-        if let target {
-            rules[bundleID] = Rule(bundleID: bundleID, appName: appName, target: target)
+    func setTarget(bundleID: String, appName: String, target: RuleTarget?) {
+        var rule = rules[bundleID] ?? Rule(bundleID: bundleID, appName: appName, target: nil, scale: nil)
+        rule.appName = appName
+        rule.target = target
+        store(rule)
+    }
+
+    func setScale(bundleID: String, appName: String, scale: Double?) {
+        var rule = rules[bundleID] ?? Rule(bundleID: bundleID, appName: appName, target: nil, scale: nil)
+        rule.appName = appName
+        rule.scale = scale
+        store(rule)
+    }
+
+    /// target 和 scale 都为空时删除整条规则
+    private func store(_ rule: Rule) {
+        if rule.target == nil && rule.scale == nil {
+            rules.removeValue(forKey: rule.bundleID)
         } else {
-            rules.removeValue(forKey: bundleID)
+            rules[rule.bundleID] = rule
         }
         save()
     }
