@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="docs/logo.png" width="160" alt="ScreenRules logo">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.png">
+    <img src="docs/logo.png" width="160" alt="ScreenRules logo">
+  </picture>
 </p>
 
 <h1 align="center">ScreenRules</h1>

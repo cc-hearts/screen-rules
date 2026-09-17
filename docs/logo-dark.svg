@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <title>ScreenRules</title>
+  <desc>Minimal line icon: an app window placed and sized on a desktop display.</desc>
+  <g stroke="#e5e5e5" stroke-width="12" stroke-linecap="round" stroke-linejoin="round">
+    <!-- 显示器：右下角缺口留给徽章 -->
+    <path d="M420 258V108a30 30 0 0 0-30-30H122a30 30 0 0 0-30 30v226a30 30 0 0 0 30 30h162"/>
+    <!-- 支架 -->
+    <path d="M226 364v18c0 20-6 40-26 40h-16"/>
+    <path d="M286 364v18c0 20 6 40 26 40h16"/>
+    <path d="M172 422h168"/>
+    <!-- 窗口：右下角缺口留给徽章 -->
+    <path d="M362 260V174a24 24 0 0 0-24-24H178a24 24 0 0 0-24 24v118a24 24 0 0 0 24 24h104"/>
+    <path d="M154 196h208"/>
+    <circle cx="180" cy="174" r="7" fill="#e5e5e5" stroke="none"/>
+    <circle cx="204" cy="174" r="7" fill="#e5e5e5" stroke="none"/>
+    <circle cx="228" cy="174" r="7" fill="#e5e5e5" stroke="none"/>
+    <!-- 轨道线：暗示窗口被搬动/调整 -->
+    <path d="M136 244c-32 24-45 54-34 79 12 27 56 39 105 25"/>
+    <path d="M370 150c26 6 36 22 36 40 0 16-8 32-26 46"/>
+    <!-- 尺寸徽章（取景框） -->
+    <rect x="306" y="282" width="112" height="112" rx="27"/>
+    <path d="M337 326v-10a8 8 0 0 1 8-8h10"/>
+    <path d="M387 326v-10a8 8 0 0 0-8-8h-10"/>
+    <path d="M337 350v10a8 8 0 0 0 8 8h10"/>
+    <path d="M387 350v10a8 8 0 0 1-8 8h-10"/>
+  </g>
+</svg>
