@@ -20,7 +20,7 @@ ScreenRules fixes this with per-app rules:
 
 - **Display rule** — an app's new windows open on the main or the secondary display
 - **Size rule** — optionally resize windows to a percentage (50–100%) of the target display, centered
-- **Force mode for stubborn apps** — apps that reposition their own window (e.g. on Dock click) get re-corrected by multi-pass enforcement after activation: 0.3s / 1.2s / 3s
+- **Once per window** — each window is placed exactly once when it appears (with a 0.25s/1s correction pass to beat apps that reposition themselves right after creation, e.g. on Dock click); afterwards you can move or resize it freely
 - Only standard main windows are managed — IME candidate popups, dialogs, drawers and floating panels are never touched
 
 ## Install & Run
@@ -52,8 +52,8 @@ Rules are stored in `~/Library/Application Support/ScreenRules/rules.json`.
 ## How it works
 
 - Observes `kAXWindowCreatedNotification` via `AXObserver` on every regular app, plus `NSWorkspace` launch / activate / terminate events
-- On window creation: apply the rule after 0.25s and 1s (many apps reposition themselves right after creating a window — the second pass wins)
-- On app activation (covers Dock-click reopens, which don't create windows): three enforcement passes at 0.3s / 1.2s / 3s
+- Each window is enforced exactly once, tracked by window ID. It applies on window creation (0.25s + 1s passes) or, for windows that predate ScreenRules or were missed by AX events, on the app's next activation
+- Re-enforcement only happens on explicit request: changing a rule, or "Apply all rules now" (apps that aren't running are skipped — never launched)
 - Moving preserves window size and relative position; size rules scale to the target display's visible frame and center
 - Displays are matched by **main / secondary semantics**, not hardware IDs — replugging monitors or swapping cables never breaks rules
 - Signed with a stable self-signed certificate (`.signing/`, git-ignored), so Accessibility permission survives rebuilds

@@ -1,14 +1,20 @@
 import Cocoa
 import ApplicationServices
 
+/// 私有但存在多年的 API：从 AXUIElement 拿 CGWindowID，用来识别“同一个窗口”
+@_silgen_name("_AXUIElementGetWindow")
+private func _AXUIElementGetWindow(_ element: AXUIElement, _ wid: UnsafeMutablePointer<CGWindowID>) -> AXError
+
 /// 监听有规则的 App 的窗口动向，把窗口搬到目标屏 / 调整到设定尺寸。
 ///
-/// 有些 App（如 Seedmux）自己的代码会在 Dock 点击后把窗口放回主屏，
-/// 所以不能只监听「窗口创建」一个事件：激活 App 后做多轮盘点（0.3s / 1.2s / 3s），
-/// 凡是不符合规则的窗口都强行纠正。
+/// 语义：**每个窗口只归位一次**。新窗口出现时（AX 事件，或激活时盘点到没见过的窗口）
+/// 执行规则；之后用户手动移动/调整不再干预。唯一会重复执行的是用户显式触发：
+/// 菜单里改规则、或点「立即按规则整理所有窗口」。
 final class WindowMover {
     static let shared = WindowMover()
     private var observers: [pid_t: AXObserver] = [:]
+    /// 已执行过规则的窗口（按所属 pid 分组），避免重复归位
+    private var enforcedWindows: [pid_t: Set<CGWindowID>] = [:]
     private var started = false
 
     func start() {
@@ -31,6 +37,7 @@ final class WindowMover {
     @objc private func appTerminated(_ note: Notification) {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         observers.removeValue(forKey: app.processIdentifier)
+        enforcedWindows.removeValue(forKey: app.processIdentifier)
     }
 
     @objc private func appActivated(_ note: Notification) {
@@ -38,23 +45,22 @@ final class WindowMover {
               let bundleID = app.bundleIdentifier,
               bundleID != Bundle.main.bundleIdentifier,
               RuleStore.shared.rule(for: bundleID) != nil else { return }
-        scheduleEnforcement(pid: app.processIdentifier, name: app.localizedName ?? bundleID)
-    }
-
-    /// 多轮盘点：有些 App 会在激活后自己再动窗口，首轮纠正会被它覆盖，故重复几次
-    private func scheduleEnforcement(pid: pid_t, name: String) {
-        for delay in [0.3, 1.2, 3.0] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                self?.enforceAllWindows(pid: pid, name: name, reason: "activation+\(delay)s")
-            }
+        let pid = app.processIdentifier
+        let name = app.localizedName ?? bundleID
+        // 激活时只盘点「没处理过」的窗口：ScreenRules 启动前已存在的、或 AX 事件漏掉的
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.enforceUnseenWindows(pid: pid, name: name)
         }
     }
 
-    private func enforceAllWindows(pid: pid_t, name: String, reason: String) {
+    private func enforceUnseenWindows(pid: pid_t, name: String) {
         for w in axWindows(pid: pid) {
+            guard let wid = windowID(of: w) else { continue }
+            guard !enforcedWindows[pid, default: []].contains(wid) else { continue }
+            enforcedWindows[pid, default: []].insert(wid)
             let result = applyRule(pid: pid, window: w)
             if result.shouldLog {
-                SRLog.log("\(reason): \(name) -> \(result)")
+                SRLog.log("activation(new window): \(name) -> \(result)")
             }
         }
     }
@@ -86,7 +92,11 @@ final class WindowMover {
     }
 
     fileprivate func handleWindowCreated(pid: pid_t, window: AXUIElement) {
-        // 两轮：很多 App 创建窗口后还会自己调整一次位置/尺寸（比如 Dock 点击触发的展示逻辑）
+        if let wid = windowID(of: window) {
+            guard !enforcedWindows[pid, default: []].contains(wid) else { return }
+            enforcedWindows[pid, default: []].insert(wid)
+        }
+        // 两轮修正：很多 App 创建窗口后还会自己调整一次位置/尺寸（比如 Dock 点击触发的展示逻辑）
         for delay in [0.25, 1.0] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self else { return }
@@ -220,6 +230,11 @@ final class WindowMover {
         return true
     }
 
+    private func windowID(of element: AXUIElement) -> CGWindowID? {
+        var wid: CGWindowID = 0
+        return _AXUIElementGetWindow(element, &wid) == .success ? wid : nil
+    }
+
     private func axWindows(pid: pid_t) -> [AXUIElement] {
         let element = AXUIElementCreateApplication(pid)
         var value: CFTypeRef?
@@ -228,11 +243,19 @@ final class WindowMover {
         return windows
     }
 
-    /// 把某个 App 所有已打开的窗口都按规则归位（设置规则时立即生效）
+    /// 显式触发（菜单改规则 / 立即整理）：把某个 App 所有已打开的窗口重新归位。
+    /// App 未运行则明确跳过——绝不启动它。
     func moveExistingWindows(bundleID: String) {
-        guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) else { return }
-        for w in axWindows(pid: app.processIdentifier) {
-            let result = applyRule(pid: app.processIdentifier, window: w)
+        guard let app = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == bundleID && !$0.isTerminated
+        }) else {
+            SRLog.log("move-existing: \(bundleID) skipped (not running)")
+            return
+        }
+        let pid = app.processIdentifier
+        for w in axWindows(pid: pid) {
+            if let wid = windowID(of: w) { enforcedWindows[pid, default: []].insert(wid) }
+            let result = applyRule(pid: pid, window: w)
             SRLog.log("move-existing: \(app.localizedName ?? bundleID) -> \(result)")
         }
     }
