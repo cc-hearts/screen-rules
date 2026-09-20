@@ -1,12 +1,13 @@
 import Cocoa
 import ApplicationServices
 
-/// representedObject 载体：一次规则编辑操作（改屏幕 或 改尺寸）
+/// representedObject 载体：一次规则编辑操作（改屏幕 / 改尺寸 / 改输入法）
 private final class RuleEdit: NSObject {
     enum Change {
-        case target(RuleTarget?)   // nil = 屏幕跟随系统默认
-        case scale(Double?)        // nil = 尺寸跟随系统默认
-        case remove                // 删除整条规则
+        case target(RuleTarget?)      // nil = 屏幕跟随系统默认
+        case scale(Double?)           // nil = 尺寸跟随系统默认
+        case inputSource(String?)     // nil = 输入法跟随系统
+        case remove                   // 删除整条规则
     }
     let bundleID: String
     let appName: String
@@ -40,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         if axTrusted() {
             WindowMover.shared.start()
+            InputSourceEnforcer.shared.start()
         } else {
             promptForPermission()
             permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { timer in
@@ -47,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     timer.invalidate()
                     SRLog.log("permission granted at runtime, starting watcher")
                     WindowMover.shared.start()
+                    InputSourceEnforcer.shared.start()
                 }
             }
         }
@@ -79,7 +82,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
            bundleID != Bundle.main.bundleIdentifier {
             let name = front.localizedName ?? bundleID
             let rule = RuleStore.shared.rule(for: bundleID)
-            let item = NSMenuItem(title: "当前 App：\(name)\(rule?.summary.map { "（\($0)）" } ?? "")",
+            let summary = ruleSummary(rule)
+            let item = NSMenuItem(title: "当前 App：\(name)\(summary.isEmpty ? "" : "（\(summary)）")",
                                   action: nil, keyEquivalent: "")
             item.submenu = ruleMenu(bundleID: bundleID, appName: name, rule: rule)
             menu.addItem(item)
@@ -93,7 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             header.isEnabled = false
             menu.addItem(header)
             for rule in rules {
-                let item = NSMenuItem(title: "\(rule.appName) → \(rule.summary ?? "")",
+                let item = NSMenuItem(title: "\(rule.appName) → \(ruleSummary(rule))",
                                       action: nil, keyEquivalent: "")
                 item.submenu = ruleMenu(bundleID: rule.bundleID, appName: rule.appName, rule: rule)
                 menu.addItem(item)
@@ -111,7 +115,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(quit)
     }
 
-    /// 单个 App 的规则编辑子菜单：屏幕 + 尺寸 + 删除
+    /// 规则摘要：「副屏 · 90% · ABC」
+    private func ruleSummary(_ rule: Rule?) -> String {
+        guard let rule else { return "" }
+        var parts: [String] = []
+        if let s = rule.summary { parts.append(s) }
+        if let id = rule.inputSourceID { parts.append(InputSourceManager.name(for: id) ?? id) }
+        return parts.joined(separator: " · ")
+    }
+
+    /// 单个 App 的规则编辑子菜单：屏幕 + 尺寸 + 输入法 + 删除
     private func ruleMenu(bundleID: String, appName: String, rule: Rule?) -> NSMenu {
         let sub = NSMenu()
 
@@ -141,6 +154,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item.indentationLevel = 1
         }
 
+        sub.addItem(.separator())
+        let imeHeader = NSMenuItem(title: "输入法（切到此 App 时生效）", action: nil, keyEquivalent: "")
+        imeHeader.isEnabled = false
+        sub.addItem(imeHeader)
+        let imeDefault = addItem(to: sub, title: "系统默认", action: #selector(setRule(_:)))
+        imeDefault.representedObject = RuleEdit(bundleID: bundleID, appName: appName, change: .inputSource(nil))
+        imeDefault.state = rule?.inputSourceID == nil ? .on : .off
+        imeDefault.indentationLevel = 1
+        for src in InputSourceManager.enabledSources() {
+            let item = addItem(to: sub, title: src.name, action: #selector(setRule(_:)))
+            item.representedObject = RuleEdit(bundleID: bundleID, appName: appName, change: .inputSource(src.id))
+            item.state = rule?.inputSourceID == src.id ? .on : .off
+            item.indentationLevel = 1
+        }
+
         if rule != nil {
             sub.addItem(.separator())
             let del = addItem(to: sub, title: "删除规则", action: #selector(setRule(_:)))
@@ -166,17 +194,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .target(let target):
             SRLog.log("rule set: \(edit.appName) (\(edit.bundleID)) screen -> \(target?.displayName ?? "默认")")
             store.setTarget(bundleID: edit.bundleID, appName: edit.appName, target: target)
+            WindowMover.shared.moveExistingWindows(bundleID: edit.bundleID)
         case .scale(let scale):
             SRLog.log("rule set: \(edit.appName) (\(edit.bundleID)) scale -> \(scale.map { "\(Int($0 * 100))%" } ?? "默认")")
             store.setScale(bundleID: edit.bundleID, appName: edit.appName, scale: scale)
+            WindowMover.shared.moveExistingWindows(bundleID: edit.bundleID)
+        case .inputSource(let id):
+            SRLog.log("rule set: \(edit.appName) (\(edit.bundleID)) ime -> \(id ?? "默认")")
+            store.setInputSource(bundleID: edit.bundleID, appName: edit.appName, inputSourceID: id)
+            // 设置的就是当前前台 App：立即切换
+            if let id, NSWorkspace.shared.frontmostApplication?.bundleIdentifier == edit.bundleID {
+                InputSourceManager.select(id: id)
+            }
         case .remove:
             SRLog.log("rule removed: \(edit.appName) (\(edit.bundleID))")
             store.setTarget(bundleID: edit.bundleID, appName: edit.appName, target: nil)
             store.setScale(bundleID: edit.bundleID, appName: edit.appName, scale: nil)
-        }
-        // 设置规则后，把这个 App 已打开的窗口也立即归位
-        if store.rule(for: edit.bundleID) != nil {
-            WindowMover.shared.moveExistingWindows(bundleID: edit.bundleID)
+            store.setInputSource(bundleID: edit.bundleID, appName: edit.appName, inputSourceID: nil)
         }
     }
 

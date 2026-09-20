@@ -10,6 +10,7 @@ struct Rule: Codable {
     var appName: String
     var target: RuleTarget?   // nil = 屏幕位置跟随系统默认
     var scale: Double?        // nil = 尺寸跟随系统默认；0.8 表示窗口占目标屏可见区域的 80%
+    var inputSourceID: String?  // nil = 输入法跟随系统；否则切到该 App 时自动切换
 
     /// 菜单里展示用，如「副屏 · 80%」；两项都未设置时返回 nil（规则应被删除）
     var summary: String? {
@@ -41,22 +42,29 @@ final class RuleStore {
     var sortedRules: [Rule] { rules.values.sorted { $0.appName < $1.appName } }
 
     func setTarget(bundleID: String, appName: String, target: RuleTarget?) {
-        var rule = rules[bundleID] ?? Rule(bundleID: bundleID, appName: appName, target: nil, scale: nil)
+        var rule = rules[bundleID] ?? Rule(bundleID: bundleID, appName: appName, target: nil, scale: nil, inputSourceID: nil)
         rule.appName = appName
         rule.target = target
         store(rule)
     }
 
     func setScale(bundleID: String, appName: String, scale: Double?) {
-        var rule = rules[bundleID] ?? Rule(bundleID: bundleID, appName: appName, target: nil, scale: nil)
+        var rule = rules[bundleID] ?? Rule(bundleID: bundleID, appName: appName, target: nil, scale: nil, inputSourceID: nil)
         rule.appName = appName
         rule.scale = scale
         store(rule)
     }
 
-    /// target 和 scale 都为空时删除整条规则
+    func setInputSource(bundleID: String, appName: String, inputSourceID: String?) {
+        var rule = rules[bundleID] ?? Rule(bundleID: bundleID, appName: appName, target: nil, scale: nil, inputSourceID: nil)
+        rule.appName = appName
+        rule.inputSourceID = inputSourceID
+        store(rule)
+    }
+
+    /// 三项都为空时删除整条规则
     private func store(_ rule: Rule) {
-        if rule.target == nil && rule.scale == nil {
+        if rule.target == nil && rule.scale == nil && rule.inputSourceID == nil {
             rules.removeValue(forKey: rule.bundleID)
         } else {
             rules[rule.bundleID] = rule

@@ -20,6 +20,7 @@ ScreenRules fixes this with per-app rules:
 
 - **Display rule** — an app's new windows open on the main or the secondary display
 - **Size rule** — optionally resize windows to a percentage (50–100%) of the target display, centered
+- **Input source rule** — optionally switch to a chosen input method (e.g. ABC / Pinyin) every time the app is activated
 - **Once per window** — each window is placed exactly once when it appears (with a 0.25s/1s correction pass to beat apps that reposition themselves right after creation, e.g. on Dock click); afterwards you can move or resize it freely
 - Only standard main windows are managed — IME candidate popups, dialogs, drawers and floating panels are never touched
 
@@ -55,6 +56,7 @@ Rules are stored in `~/Library/Application Support/ScreenRules/rules.json`.
 - Each window is enforced exactly once, tracked by window ID. It applies on window creation (0.25s + 1s passes) or, for windows that predate ScreenRules or were missed by AX events, on the app's next activation
 - Re-enforcement only happens on explicit request: changing a rule, or "Apply all rules now" (apps that aren't running are skipped — never launched)
 - Moving preserves window size and relative position; size rules scale to the target display's visible frame and center
+- Input source switching uses Text Input Source Services (TIS) on app activation — no Accessibility permission needed for this part
 - Displays are matched by **main / secondary semantics**, not hardware IDs — replugging monitors or swapping cables never breaks rules
 - Signed with a stable self-signed certificate (`.signing/`, git-ignored), so Accessibility permission survives rebuilds
 
