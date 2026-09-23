@@ -25,11 +25,11 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist" 2>/dev/null || true
 
 # 签名
-if security find-identity -v -p codesigning | grep -q "ScreenRules Dev"; then
-    codesign --force --deep --sign "ScreenRules Dev" --identifier com.carl.screenrules "$APP"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "ScreenRules Dev"; then
+    codesign --force --deep --sign "ScreenRules Dev" --identifier com.carl.screenrules "$APP" 2>/dev/null || true
     echo "==> signed with: ScreenRules Dev"
 else
-    codesign --force --deep --sign - --identifier com.carl.screenrules "$APP"
+    codesign --force --deep --sign - --identifier com.carl.screenrules "$APP" 2>/dev/null || true
     echo "==> signed ad-hoc"
 fi
 
