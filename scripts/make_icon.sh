@@ -1,47 +1,108 @@
 #!/bin/sh
-# 从 docs/logo.svg 重新生成所有图标资产
-#   - docs/logo.png / logo-dark.png  README 用（透明底，深浅双版本）
-#   - docs/app-icon.svg              自动生成：浅色圆角底板 + logo 线条（勿手改）
-#   - Resources/AppIcon.icns         App 图标
-# 依赖: npx sharp-cli（libvips 内置 SVG 渲染，保留透明背景）
+# 从 docs/logo-original.jpg 重新生成所有图标资产
+#   - docs/app-icon.png              macOS 标准圆角矩形高清图标 (1024x1024)
+#   - docs/logo.png / logo-dark.png  README 展示图
+#   - Resources/AppIcon.icns         macOS App 图标
 set -e
 cd "$(dirname "$0")/.."
 
-sed 's/#171717/#e5e5e5/g' docs/logo.svg > docs/logo-dark.svg
-npx -y sharp-cli -i docs/logo.svg      -o docs/logo.png      --density 180
-npx -y sharp-cli -i docs/logo-dark.svg -o docs/logo-dark.png --density 180
+swift - <<'SWIFT'
+import AppKit
 
-python3 - <<'PY'
-import re
-logo = open("docs/logo.svg").read()
-g = re.search(r"<g .*?</g>", logo, re.S).group(0)
-wrapper = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
-  <title>ScreenRules app icon</title>
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FFFFFF"/>
-      <stop offset="1" stop-color="#EFEFF2"/>
-    </linearGradient>
-  </defs>
-  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
-  <svg x="144" y="150" width="736" height="736" viewBox="0 0 512 512" fill="none">{g}</svg>
-</svg>
-'''
-open("docs/app-icon.svg", "w").write(wrapper)
-PY
-npx -y sharp-cli -i docs/app-icon.svg -o /tmp/app-icon.png --density 90
+let originalPath = "docs/logo-original.jpg"
+guard let srcImage = NSImage(contentsOfFile: originalPath) else {
+    print("错误: 找不到 \(originalPath)")
+    exit(1)
+}
 
-ICONSET=/tmp/AppIcon.iconset
-rm -rf "$ICONSET" && mkdir -p "$ICONSET"
-sips -z 16 16   /tmp/app-icon.png --out "$ICONSET/icon_16x16.png"      >/dev/null
-sips -z 32 32   /tmp/app-icon.png --out "$ICONSET/icon_16x16@2x.png"   >/dev/null
-sips -z 32 32   /tmp/app-icon.png --out "$ICONSET/icon_32x32.png"      >/dev/null
-sips -z 64 64   /tmp/app-icon.png --out "$ICONSET/icon_32x32@2x.png"   >/dev/null
-sips -z 128 128 /tmp/app-icon.png --out "$ICONSET/icon_128x128.png"    >/dev/null
-sips -z 256 256 /tmp/app-icon.png --out "$ICONSET/icon_128x128@2x.png" >/dev/null
-sips -z 256 256 /tmp/app-icon.png --out "$ICONSET/icon_256x256.png"    >/dev/null
-sips -z 512 512 /tmp/app-icon.png --out "$ICONSET/icon_256x256@2x.png" >/dev/null
-sips -z 512 512 /tmp/app-icon.png --out "$ICONSET/icon_512x512.png"    >/dev/null
-cp /tmp/app-icon.png "$ICONSET/icon_512x512@2x.png"
-iconutil -c icns "$ICONSET" -o Resources/AppIcon.icns
-echo "==> icons regenerated"
+let canvasSize = NSSize(width: 1024, height: 1024)
+let iconImage = NSImage(size: canvasSize)
+iconImage.lockFocus()
+
+guard let ctx = NSGraphicsContext.current?.cgContext else { exit(1) }
+
+// macOS Big Sur / Sonoma / Sequoia 规范尺寸：824x824 居中 (x: 100, y: 100)
+let iconRect = NSRect(x: 100, y: 100, width: 824, height: 824)
+let path = NSBezierPath(roundedRect: iconRect, xRadius: 185, yRadius: 185)
+
+// 外阴影 (柔和自然)
+ctx.saveGState()
+let shadow = NSShadow()
+shadow.shadowBlurRadius = 32
+shadow.shadowOffset = NSSize(width: 0, height: -18)
+shadow.shadowColor = NSColor(white: 0.0, alpha: 0.35)
+shadow.set()
+NSColor.black.setFill()
+path.fill()
+ctx.restoreGState()
+
+// 裁剪为标准圆角矩形并绘制 Logo
+ctx.saveGState()
+path.addClip()
+srcImage.draw(in: iconRect, from: NSRect(origin: .zero, size: srcImage.size), operation: .sourceOver, fraction: 1.0)
+
+// 边缘高光线 (提升原生质感)
+let strokeColor = NSColor(white: 1.0, alpha: 0.12)
+strokeColor.setStroke()
+path.lineWidth = 2.0
+path.stroke()
+ctx.restoreGState()
+
+iconImage.unlockFocus()
+
+guard let tiff = iconImage.tiffRepresentation,
+      let rep = NSBitmapImageRep(data: tiff),
+      let pngData = rep.representation(using: .png, properties: [:]) else {
+    print("错误: 无法生成 PNG 数据")
+    exit(1)
+}
+
+let appIconPng = "docs/app-icon.png"
+try! pngData.write(to: URL(fileURLWithPath: appIconPng))
+try! pngData.write(to: URL(fileURLWithPath: "docs/logo.png"))
+try! pngData.write(to: URL(fileURLWithPath: "docs/logo-dark.png"))
+print("==> 已生成 docs/app-icon.png, docs/logo.png, docs/logo-dark.png")
+
+// 生成全套 iconset 分辨率
+let iconsetDir = "/tmp/ScreenRules.iconset"
+let fm = FileManager.default
+try? fm.removeItem(atPath: iconsetDir)
+try! fm.createDirectory(atPath: iconsetDir, withIntermediateDirectories: true)
+
+let sizes: [(String, Int)] = [
+    ("icon_16x16.png", 16),
+    ("icon_16x16@2x.png", 32),
+    ("icon_32x32.png", 32),
+    ("icon_32x32@2x.png", 64),
+    ("icon_128x128.png", 128),
+    ("icon_128x128@2x.png", 256),
+    ("icon_256x256.png", 256),
+    ("icon_256x256@2x.png", 512),
+    ("icon_512x512.png", 512),
+    ("icon_512x512@2x.png", 1024)
+]
+
+for (name, size) in sizes {
+    let dest = "\(iconsetDir)/\(name)"
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/sips")
+    p.arguments = ["-z", "\(size)", "\(size)", appIconPng, "--out", dest]
+    p.standardOutput = FileHandle.nullDevice
+    p.standardError = FileHandle.nullDevice
+    try! p.run()
+    p.waitUntilExit()
+}
+
+let iconutil = Process()
+iconutil.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
+iconutil.arguments = ["-c", "icns", iconsetDir, "-o", "Resources/AppIcon.icns"]
+try! iconutil.run()
+iconutil.waitUntilExit()
+
+if iconutil.terminationStatus == 0 {
+    print("==> 已生成 Resources/AppIcon.icns")
+} else {
+    print("错误: iconutil 执行失败")
+    exit(1)
+}
+SWIFT

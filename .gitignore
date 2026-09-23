@@ -2,3 +2,6 @@
 ScreenRules.app
 .DS_Store
 .signing/
+*.dmg
+*.zip
+*-sha256.txt

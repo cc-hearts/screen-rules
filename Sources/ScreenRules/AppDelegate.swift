@@ -110,6 +110,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         addItem(to: menu, title: "打开调试日志…", action: #selector(openLog))
         menu.addItem(.separator())
 
+        addItem(to: menu, title: "关于 ScreenRules…", action: #selector(openAbout))
+        menu.addItem(.separator())
+
         let quit = NSMenuItem(title: "退出 ScreenRules", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         quit.target = NSApp
         menu.addItem(quit)
@@ -233,5 +236,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             NSWorkspace.shared.open(url)
         }
         promptForPermission()
+    }
+
+    @objc private func openAbout() {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        NSApplication.shared.orderFrontStandardAboutPanel(
+            options: [
+                NSApplication.AboutPanelOptionKey.applicationName: "ScreenRules"
+            ]
+        )
     }
 }
