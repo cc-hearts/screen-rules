@@ -5,18 +5,58 @@ cd "$(dirname "$0")/.."
 VERSION="${1:-0.0.1}"
 echo "==> Packaging ScreenRules v${VERSION} (Universal: arm64 + x86_64)..."
 
-# 编译两个架构
-swift build -c release --triple arm64-apple-macosx
-swift build -c release --triple x86_64-apple-macosx
-
 APP="ScreenRules.app"
+BIN_OUT="$APP/Contents/MacOS/ScreenRules"
+
+# 定位某个架构的 release 产物。SwiftPM 的产物布局随工具链变化：
+#   老布局  .build/<triple>/release/<target>          (Xcode 15 及更早)
+#   新布局  .build/out/Products/Release/<target>      (Swift 6 / Xcode 26+)
+# 新布局下两个 triple 会写同一个路径，所以不能只靠路径区分架构。
+find_release_binary() {
+    triple="$1"
+    for cand in \
+        ".build/${triple}/release/ScreenRules" \
+        ".build/out/Products/Release/ScreenRules"
+    do
+        if [ -f "$cand" ]; then
+            echo "$cand"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# 编译两个架构，尝试合成 universal
+swift build -c release --triple arm64-apple-macosx
+ARM_BIN="$(find_release_binary arm64-apple-macosx)" || ARM_BIN=""
+swift build -c release --triple x86_64-apple-macosx
+X86_BIN="$(find_release_binary x86_64-apple-macosx)" || X86_BIN=""
+
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-# 合并生成通用二进制 (Universal Binary)
-lipo -create -output "$APP/Contents/MacOS/ScreenRules" \
-  .build/arm64-apple-macosx/release/ScreenRules \
-  .build/x86_64-apple-macosx/release/ScreenRules
+if [ -n "$ARM_BIN" ] && [ -n "$X86_BIN" ] && [ "$ARM_BIN" != "$X86_BIN" ]; then
+    # 两个独立产物 -> 真正的 universal
+    echo "==> universal: $ARM_BIN + $X86_BIN"
+    lipo -create -output "$BIN_OUT" "$ARM_BIN" "$X86_BIN"
+else
+    # 只剩一个产物（工具链把两个架构写到了同一路径）。此时不能假装它是
+    # universal：最后编译的那个架构会覆盖前一个，产物可能不是本机架构
+    # （Apple Silicon 上可能得到 x86_64-only，装上去根本跑不起来）。
+    SINGLE="${ARM_BIN:-$X86_BIN}"
+    HOST_ARCH="$(uname -m)"
+    echo "==> note: toolchain produced one artifact only: $SINGLE"
+    if lipo -info "$SINGLE" 2>/dev/null | grep -q "$HOST_ARCH"; then
+        echo "==> note: single-arch ($HOST_ARCH) build; universal needs a toolchain that honours --triple"
+        cp "$SINGLE" "$BIN_OUT"
+    else
+        echo "==> note: artifact arch != host arch, rebuilding for $HOST_ARCH"
+        swift build -c release
+        cp "$(find_release_binary "$HOST_ARCH-apple-macosx")" "$BIN_OUT"
+    fi
+fi
+
+echo "==> binary: $(lipo -info "$BIN_OUT")"
 
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
