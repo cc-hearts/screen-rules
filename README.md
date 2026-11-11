@@ -22,7 +22,7 @@ ScreenRules fixes this with per-app rules:
 - **Size rule** — optionally resize windows to a percentage (50–100%) of the target display, centered
 - **Input source rule** — optionally switch to a chosen input method (e.g. ABC / Pinyin) every time the app is activated
 - **Once per window** — each window is placed exactly once when it appears (with a 0.25s/1s correction pass to beat apps that reposition themselves right after creation, e.g. on Dock click); afterwards you can move or resize it freely
-- Only standard main windows are managed — IME candidate popups, dialogs, drawers and floating panels are never touched
+- Only main windows are managed — image viewers, dialogs, sheets, floating panels and IME candidate popups are never touched (a window is skipped if it declares itself not-main, hangs off another window, is not resizable, sits outside the main window layer, or is minimized)
 
 ## Install & Run
 

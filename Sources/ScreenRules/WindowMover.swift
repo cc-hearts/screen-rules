@@ -110,7 +110,7 @@ final class WindowMover {
     }
 
     enum MoveResult: CustomStringConvertible {
-        case skipped               // 非标准窗口（输入法候选框/对话框/面板等），不处理
+        case skipped(SkipReason)   // 不是主窗口（弹窗/看图窗口/面板/最小化等），不处理
         case moved(from: String, to: String)
         case resized(Int)            // 缩放百分比
         case alreadyThere
@@ -120,14 +120,14 @@ final class WindowMover {
 
         var shouldLog: Bool {
             switch self {
-            case .noRule, .skipped: return false
+            case .noRule: return false
             default: return true
             }
         }
 
         var description: String {
             switch self {
-            case .skipped:           return "skipped"
+            case .skipped(let r):      return "skipped(\(r))"
             case .moved(let f, let t): return "moved \(f) -> \(t)"
             case .resized(let p):      return "resized to \(p)%"
             case .alreadyThere:       return "already ok"
@@ -149,7 +149,7 @@ final class WindowMover {
 
     /// 对单个窗口应用规则：先搬屏（如有 target），再调尺寸（如有 scale）
     private func apply(rule: Rule, to window: AXUIElement) -> MoveResult {
-        guard shouldManage(window) else { return .skipped }
+        if let reason = skipReason(for: window) { return .skipped(reason) }
         var posRef: CFTypeRef?
         var sizeRef: CFTypeRef?
         let posErr = AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &posRef)
@@ -217,17 +217,65 @@ final class WindowMover {
         return .alreadyThere
     }
 
-    /// 只管理「正常主窗口」。输入法候选框、对话框、抽屉、浮动面板等一律跳过——
-    /// 它们会被系统/宿主 App 自己定位（比如候选框跟随光标），我们插手只会添乱。
-    /// 读不出 subrole 时保守跳过。
-    private func shouldManage(_ window: AXUIElement) -> Bool {
+    /// 这个窗口该不该被归位：把 AX/CG 侧的事实读出来，交给 `WindowClassifier` 判定。
+    /// 只管 App 的主窗口（会话主窗口、多开窗口、文档窗口）；看图窗口、对话框、sheet、
+    /// 浮动面板、HUD、输入法候选框一律跳过——那些由系统或宿主 App 自己定位。
+    /// 读不出关键事实时保守跳过（返回非 nil 即跳过原因）。
+    private func skipReason(for window: AXUIElement) -> SkipReason? {
+        func string(_ attr: String) -> String? {
+            var ref: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(window, attr as CFString, &ref) == .success,
+                  let s = ref as? String else { return nil }
+            return s
+        }
+        func bool(_ attr: String) -> Bool? {
+            var ref: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(window, attr as CFString, &ref) == .success,
+                  let b = ref as? Bool else { return nil }
+            return b
+        }
+
         var roleRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(window, kAXRoleAttribute as CFString, &roleRef) == .success,
-              (roleRef as? String) == kAXWindowRole else { return false }
-        var subRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(window, kAXSubroleAttribute as CFString, &subRef) == .success,
-              (subRef as? String) == "AXStandardWindow" else { return false }
-        return true
+              (roleRef as? String) == kAXWindowRole else { return .notStandardWindow }
+
+        // 父元素是不是 App：挂在别的窗口下的（sheet、attach 对话框）不碰
+        var parentRef: CFTypeRef?
+        var parentIsApp = false
+        if AXUIElementCopyAttributeValue(window, kAXParentAttribute as CFString, &parentRef) == .success,
+           let parent = parentRef {
+            var parentRoleRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(parent as! AXUIElement, kAXRoleAttribute as CFString, &parentRoleRef) == .success,
+               let role = parentRoleRef as? String {
+                parentIsApp = (role == kAXApplicationRole)
+            }
+        }
+
+        // CG layer：浮动面板/通知/候选框都在别的层
+        var wid: CGWindowID = 0
+        var cgLayer = -1
+        if _AXUIElementGetWindow(window, &wid) == .success,
+           let info = windowInfo(wid: wid) {
+            cgLayer = info[kCGWindowLayer as String] as? Int ?? -1
+        }
+
+        let facts = WindowFacts(
+            subrole: string(kAXSubroleAttribute),
+            isMain: bool(kAXMainAttribute),
+            parentIsApp: parentIsApp,
+            isResizable: string("AXZoomButton") != nil || string("AXGrowArea") != nil,
+            cgLayer: cgLayer,
+            isMinimized: bool(kAXMinimizedAttribute) ?? false
+        )
+        guard case .skip(let reason) = WindowClassifier.classify(facts) else { return nil }
+        return reason
+    }
+
+    /// 用 CG API 拿窗口 layer（读不到返回 nil）
+    private func windowInfo(wid: CGWindowID) -> [String: Any]? {
+        guard let list = CGWindowListCopyWindowInfo([.optionIncludingWindow, .excludeDesktopElements], wid)
+                as? [[String: Any]] else { return nil }
+        return list.first
     }
 
     private func windowID(of element: AXUIElement) -> CGWindowID? {

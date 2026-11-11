@@ -5,6 +5,7 @@ let package = Package(
     name: "ScreenRules",
     platforms: [.macOS(.v13)],
     targets: [
-        .executableTarget(name: "ScreenRules", path: "Sources/ScreenRules")
+        .executableTarget(name: "ScreenRules", path: "Sources/ScreenRules"),
+        .testTarget(name: "ScreenRulesTests", dependencies: ["ScreenRules"], path: "Tests/ScreenRulesTests")
     ]
 )
