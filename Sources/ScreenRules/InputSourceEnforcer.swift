@@ -20,8 +20,12 @@ final class InputSourceEnforcer {
               bundleID != Bundle.main.bundleIdentifier,
               let id = RuleStore.shared.rule(for: bundleID)?.inputSourceID else { return }
         guard InputSourceManager.currentID() != id else { return }
-        let ok = InputSourceManager.select(id: id)
-        let name = InputSourceManager.name(for: id) ?? id
-        SRLog.log("input-source: \(app.localizedName ?? bundleID) -> \(name) \(ok ? "ok" : "FAILED (source missing?)")")
+        switch InputSourceManager.select(id: id) {
+        case .selected:
+            let name = InputSourceManager.name(for: id) ?? id
+            SRLog.log("input-source: \(app.localizedName ?? bundleID) -> \(name) ok")
+        case .failed(let reason):
+            SRLog.log("input-source: \(app.localizedName ?? bundleID) -> \(reason)")
+        }
     }
 }
