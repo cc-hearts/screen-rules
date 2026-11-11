@@ -36,6 +36,42 @@ jobs:
       - name: Run tests
         run: swift test
 
+      # TCC grants (accessibility, screen recording, files and folders) are tied
+      # to the app's designated requirement. A self-signed certificate's DR is
+      # the binary's cdhash, so every build gets a new identity and installed
+      # copies lose their grants after each update. Signing every release with
+      # the same Apple Development certificate keeps the DR — and the grants —
+      # stable across rebuilds.
+      - name: Import the macOS signing certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -base64 24)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          if [ -n "${MACOS_CERTIFICATE:-}" ]; then
+            echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+            security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" \
+              -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+            rm "$RUNNER_TEMP/certificate.p12"
+            security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain"
+            security list-keychains -d user -s "$keychain" login.keychain
+            identity="$(security find-identity -v -p codesigning "$keychain" |
+              sed -n 's/.*"\(Apple Development: .*\)"/\1/p' | head -1)"
+            if [ -n "$identity" ]; then
+              echo "MACOS_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+              echo "==> will sign with: $identity"
+            else
+              echo "==> no Apple Development identity in the certificate; falling back"
+            fi
+          else
+            echo "==> MACOS_CERTIFICATE secret not set; falling back to ad-hoc"
+          fi
+
       - name: Package Universal App (DMG & ZIP)
         run: |
           chmod +x scripts/package.sh
