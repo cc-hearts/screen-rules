@@ -64,33 +64,8 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 # 动态同步 Info.plist 中的版本号
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist" 2>/dev/null || true
 
-# 签名
-#
-# TCC 的授权（辅助功能、屏幕录制、文件访问）绑定的是 designated requirement。
-# 自签名证书的 DR 落在二进制的 cdhash 上，每次重新编译产物内容一变，
-# macOS 就认成新程序，已授予的权限全部失效——这就是「每次装完都要重新授权」。
-# CA 签发的证书（Apple Development）的 DR 是「证书本身」，二进制变了授权仍在。
-# 所以优先用 Apple Development 签名，只在找不到时才退回自签名。
-SIGN_IDENTITY=""
-if security find-identity -v -p codesigning 2>/dev/null | grep -q "Apple Development"; then
-    SIGN_IDENTITY="$(security find-identity -v -p codesigning | sed -n 's/.*"\(Apple Development: .*\)"/\1/p' | head -1)"
-fi
-
-if [ -n "$SIGN_IDENTITY" ]; then
-    codesign --force --deep --sign "$SIGN_IDENTITY" --identifier com.carl.screenrules "$APP" 2>/dev/null \
-        && echo "==> signed with: $SIGN_IDENTITY (TCC grants survive rebuilds)" \
-        || echo "==> Apple Development signing failed, falling back"
-fi
-
-if ! codesign --verify --deep "$APP" 2>/dev/null; then
-    if security find-identity -v -p codesigning 2>/dev/null | grep -q "ScreenRules Dev"; then
-        codesign --force --deep --sign "ScreenRules Dev" --identifier com.carl.screenrules "$APP" 2>/dev/null || true
-        echo "==> signed with: ScreenRules Dev (self-signed; expect to re-grant accessibility)"
-    else
-        codesign --force --deep --sign - --identifier com.carl.screenrules "$APP" 2>/dev/null || true
-        echo "==> signed ad-hoc (expect to re-grant accessibility)"
-    fi
-fi
+# 签名走共享逻辑（与 build.sh 同一处，避免两边各写一遍而漂移）
+sh "$(dirname "$0")/sign.sh" "$APP"
 
 echo "==> designated requirement: $(codesign -d --requirements - "$APP" 2>&1 | sed -n 's/.*designated => //p' | cut -c1-60)..."
 

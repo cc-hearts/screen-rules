@@ -8,13 +8,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/ScreenRules "$APP/Contents/MacOS/ScreenRules"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
-# 优先用固定的自签名证书（权限授权跨构建保留）；没有就退回临时签名（每次构建权限会失效）
-if security find-identity -v -p codesigning | grep -q "ScreenRules Dev"; then
-    codesign --force --deep --sign "ScreenRules Dev" --identifier com.carl.screenrules "$APP"
-    echo "==> signed with: ScreenRules Dev"
-else
-    codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
-    echo "==> signed ad-hoc (注意：每次重建后辅助功能授权会失效)"
-fi
+# 签名走共享逻辑（与 scripts/package.sh 同一处，避免两边各写一遍而漂移）
+sh "$(dirname "$0")/scripts/sign.sh" "$APP"
 echo "==> built: $(pwd)/$APP"
 echo "==> run:   open $APP"
