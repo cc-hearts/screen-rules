@@ -259,13 +259,20 @@ final class WindowMover {
             cgLayer = info[kCGWindowLayer as String] as? Int ?? -1
         }
 
-        let facts = WindowFacts(
-            subrole: string(kAXSubroleAttribute),
-            isMain: bool(kAXMainAttribute),
+        // 缩放按钮 / 缩放区的值是 AXUIElementRef（不是字符串），原样交给 make() 判元素
+        var zoomRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(window, kAXZoomButtonAttribute as CFString, &zoomRef)
+        var growRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(window, kAXGrowAreaAttribute as CFString, &growRef)
+
+        let facts = WindowFacts.make(
+            subrole: string(kAXSubroleAttribute).map { $0 as CFTypeRef },
+            isMain: bool(kAXMainAttribute).map { $0 as CFTypeRef },
             parentIsApp: parentIsApp,
-            isResizable: string("AXZoomButton") != nil || string("AXGrowArea") != nil,
+            zoomButton: zoomRef,
+            growArea: growRef,
             cgLayer: cgLayer,
-            isMinimized: bool(kAXMinimizedAttribute) ?? false
+            isMinimized: bool(kAXMinimizedAttribute).map { $0 as CFTypeRef }
         )
         guard case .skip(let reason) = WindowClassifier.classify(facts) else { return nil }
         return reason

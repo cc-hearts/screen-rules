@@ -1,4 +1,5 @@
 import Foundation
+import ApplicationServices
 
 /// 一个窗口在 AX / CG 侧读到的、判定所需的事实集合。
 /// 只放纯数据，不含任何 AppKit/AX 依赖——这样判定逻辑可以在测试里直接驱动。
@@ -9,6 +10,40 @@ struct WindowFacts {
     var isResizable: Bool         // 有没有缩放按钮 / 可调尺寸
     var cgLayer: Int              // CGWindowLayer
     var isMinimized: Bool         // AXMinimized
+
+    /// 从 AX / CG 侧读到的原始属性构造。
+    ///
+    /// 可调尺寸的判据是窗口有没有**缩放按钮**（AXZoomButton）或**缩放区**
+    /// （AXGrowArea）——两者都是「能不能改尺寸」的权威答案。
+    ///
+    /// 这两个属性的值是 **AXUIElementRef，不是字符串**（Apple 的
+    /// AXAttributeConstants.h：`Value: An AXUIElementRef of the window's zoom
+    /// button element`）。按 String 读会恒得 nil，isResizable 就恒为 false，
+    /// 于是每个正常主窗口都被判 not-resizable、所有规则一条都不生效。
+    /// 所以这里判的是「元素存在」，且必须是元素——读成别的类型不算。
+    static func make(subrole: CFTypeRef?,
+                     isMain: CFTypeRef?,
+                     parentIsApp: Bool,
+                     zoomButton: CFTypeRef?,
+                     growArea: CFTypeRef?,
+                     cgLayer: Int,
+                     isMinimized: CFTypeRef?) -> WindowFacts {
+        WindowFacts(
+            subrole: subrole as? String,
+            isMain: isMain as? Bool,
+            parentIsApp: parentIsApp,
+            isResizable: isElement(zoomButton) || isElement(growArea),
+            cgLayer: cgLayer,
+            isMinimized: isMinimized as? Bool ?? false
+        )
+    }
+
+    /// 这个 CFTypeRef 是不是一个 AX 元素（而不是字符串/布尔/其它）。
+    /// 元素属性必须是元素，读成别的类型一律当作「读不到」。
+    private static func isElement(_ ref: CFTypeRef?) -> Bool {
+        guard let ref else { return false }
+        return CFGetTypeID(ref) == AXUIElementGetTypeID()
+    }
 }
 
 enum WindowClass: Equatable {
